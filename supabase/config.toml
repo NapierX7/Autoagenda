@@ -1,0 +1,34 @@
+# ================================================================
+# SUPABASE CLI CONFIG - AutoAgenda
+# Project-ref: adyzxvkrrdrpkqxjtrxj
+#
+# OBJETIVO: garantir que os deploys via CLI (`supabase functions deploy`)
+# SEMPRE venham com `verify_jwt = false` nas functions que permitem
+# chamada anônima (cadastro de vendedor / login etc.) e não resetem
+# a configuração do painel a cada novo deploy.
+# ================================================================
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[edge_functions]
+deploy_all_field = "functions"
+
+[edge_functions.user-admin-actions]
+verify_jwt = false
+
+[edge_functions.create-seller]
+verify_jwt = false
+
+[storage]
+enabled = true
+file_size_limit = 100MiB
