@@ -1,14 +1,15 @@
 import { supabase, hasSupabaseCredentials } from '../lib/supabase';
+import {
+  formatBytes,
+  isOversizedInlineLaudoDataUrl,
+  LAUDO_LIMITS,
+} from '../utils/laudoLimits';
 
-const LAUDOS_BUCKET = 'laudos';
-const MAX_STORAGE_UPLOAD_BYTES = 50 * 1024 * 1024;
-const FALLBACK_MAX_BASE64_BYTES = 20 * 1024 * 1024;
+export { formatBytes, isOversizedInlineLaudoDataUrl, LAUDO_LIMITS };
 
-export const LAUDO_LIMITS = {
-  MAX_STORAGE_UPLOAD_BYTES,
-  FALLBACK_MAX_BASE64_BYTES,
-  STORAGE_BUCKET: LAUDOS_BUCKET,
-};
+const LAUDOS_BUCKET = LAUDO_LIMITS.STORAGE_BUCKET;
+const MAX_STORAGE_UPLOAD_BYTES = LAUDO_LIMITS.MAX_STORAGE_UPLOAD_BYTES;
+const FALLBACK_MAX_BASE64_BYTES = LAUDO_LIMITS.MAX_INLINE_FILE_BYTES;
 
 function sanitizePathPart(value = '') {
   return String(value)
@@ -24,18 +25,6 @@ function buildStoragePath({ companyId, appointmentId, fileName }) {
   const timestamp = Date.now();
   const safeFileName = sanitizePathPart(fileName || 'laudo.pdf');
   return `${safeCompany}/${safeAppointment}/${timestamp}_${safeFileName}`;
-}
-
-export function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let unitIndex = 0;
-  let size = bytes;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  return `${size.toFixed(size >= 100 || unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
 }
 
 export async function isStorageBucketReady() {

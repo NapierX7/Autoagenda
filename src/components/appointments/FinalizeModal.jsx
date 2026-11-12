@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   fileToBase64,
-  formatBytes,
-  LAUDO_LIMITS,
   uploadLaudoToStorage,
 } from '../../services/laudosStorageService';
+import {
+  formatBytes,
+  isOversizedInlineLaudoDataUrl,
+  LAUDO_LIMITS,
+} from '../../utils/laudoLimits';
 
 export default function FinalizeModal({
   appointment,
@@ -68,7 +71,7 @@ export default function FinalizeModal({
     setUploadProgress(1);
     setUploadStage('Preparando arquivo…');
 
-    const base64FallbackMaxSize = LAUDO_LIMITS.FALLBACK_MAX_BASE64_BYTES;
+    const inlineMaxBytes = LAUDO_LIMITS.MAX_INLINE_FILE_BYTES;
 
     try {
       if (companyId) {
@@ -80,7 +83,7 @@ export default function FinalizeModal({
               if (abortSignalRef.current) return;
               setUploadProgress(Math.min(95, percent));
               if (stage === 'uploading') setUploadStage('Enviando para o Storage…');
-              if (stage === 'generating-url') setUploadStage('Gerando link público…');
+              if (stage === 'generating-url') setUploadStage('Gerando link assinado/público…');
             },
           );
           if (abortSignalRef.current) return;
@@ -95,38 +98,41 @@ export default function FinalizeModal({
             storageError && typeof storageError.message === 'string' ? storageError.message : '';
           const bucketNotFound =
             storageMessage.includes('Bucket') && storageMessage.includes('laudos');
-          // Base64 no banco causa timeouts em finalização; só permite arquivos bem pequenos.
-          const safeInlineMax = Math.min(base64FallbackMaxSize, 150 * 1024);
-          if (file.size > safeInlineMax) {
+          if (file.size > inlineMaxBytes) {
             if (bucketNotFound) {
               throw new Error(
                 `Bucket "laudos" não está configurado no Supabase Storage. ` +
-                  `Configure o Storage antes de anexar arquivos maiores que ${formatBytes(safeInlineMax)}, ` +
+                  `Configure o Storage antes de anexar arquivos maiores que ${formatBytes(inlineMaxBytes)}, ` +
                   `ou cole uma URL https do arquivo.`,
               );
             }
             throw new Error(
               storageMessage ||
-                `Falha no upload do Storage. Não use Base64 para arquivos > ${formatBytes(safeInlineMax)} — isso trava a finalização.`,
+                `Falha no upload do Storage. Não use Base64 para arquivos > ${formatBytes(inlineMaxBytes)} — a finalização rejeitaria o anexo.`,
             );
           }
-          setUploadStage('Modo compatível (Base64 curto)…');
+          setUploadStage('Modo compatível (Base64 alinhado à finalização)…');
           setUploadProgress(40);
         }
       }
 
-      const safeInlineMax = Math.min(base64FallbackMaxSize, 150 * 1024);
-      if (file.size > safeInlineMax) {
+      if (file.size > inlineMaxBytes) {
         throw new Error(
-          `Arquivo acima de ${formatBytes(safeInlineMax)} exige Storage ou URL https. Upload e finalização devem ser feitos sem embutir Base64 no banco.`,
+          `Arquivo acima de ${formatBytes(inlineMaxBytes)} exige Storage ou URL https. ` +
+            `O limite do anexo embutido é o mesmo da finalização (evita preparar arquivo que será recusado).`,
         );
       }
-      const base64 = await fileToBase64(file, safeInlineMax);
+      const base64 = await fileToBase64(file, inlineMaxBytes);
       if (abortSignalRef.current) return;
+      if (isOversizedInlineLaudoDataUrl(base64)) {
+        throw new Error(
+          'Arquivo convertido ultrapassou o limite de caracteres da finalização. Use Storage ou URL https.',
+        );
+      }
       setLaudoFileUrl(base64);
       setUploadSource('base64');
       setUploadProgress(100);
-      setUploadStage('Pronto ✅ (modo compatível curto)');
+      setUploadStage('Pronto ✅ (modo compatível alinhado)');
     } catch (err) {
       if (abortSignalRef.current) return;
       clearFile();
@@ -145,7 +151,7 @@ export default function FinalizeModal({
       return;
     }
 
-    if (laudoFileUrl?.startsWith('data:') && laudoFileUrl.length > 200 * 1024) {
+    if (isOversizedInlineLaudoDataUrl(laudoFileUrl)) {
       setLocalError(
         'Anexo Base64 grande demais para finalizar. Refaça o upload via Storage ou informe uma URL https, depois confirme a finalização.',
       );
@@ -203,11 +209,14 @@ export default function FinalizeModal({
         <div className="auth-message info">
           <strong>💡 Tamanho de arquivo & Storage</strong>
           <span>
-            <strong>✅ Com Supabase Storage (recomendado):</strong> até <strong>50MB</strong>.
-            Arquivo é enviado para o bucket e só um link é salvo no banco.<br /><br />
-            <strong>⚠️ Sem Storage (modo compatível):</strong> até <strong>20MB</strong>,
-            convertido para Base64 (+33% tamanho salvo diretamente na tabela).<br /><br />
-            <strong>🔗 Alternativa sempre válida:</strong> cole a URL do Google Drive / Dropbox abaixo.
+            <strong>✅ Com Supabase Storage (recomendado):</strong> até{' '}
+            <strong>{formatBytes(LAUDO_LIMITS.MAX_STORAGE_UPLOAD_BYTES)}</strong>.
+            O arquivo sobe no bucket e só o link é gravado no agendamento.<br /><br />
+            <strong>⚠️ Sem Storage (modo compatível):</strong> até{' '}
+            <strong>{formatBytes(LAUDO_LIMITS.MAX_INLINE_FILE_BYTES)}</strong> binários —
+            mesmo teto da finalização (data URL ≤ {formatBytes(LAUDO_LIMITS.MAX_INLINE_DATA_URL_CHARS)} de caracteres).
+            Arquivo maior que isso não pode ser preparado no modal.<br /><br />
+            <strong>🔗 Alternativa:</strong> cole uma URL https do arquivo abaixo.
           </span>
         </div>
 

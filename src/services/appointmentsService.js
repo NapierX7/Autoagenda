@@ -1,10 +1,14 @@
 import { format } from 'date-fns';
 import { hasSupabaseCredentials, supabase } from '../lib/supabase';
 import { assertMutableAppointmentId } from '../utils/appointmentIds';
+import {
+  APPOINTMENT_ROW_SELECT,
+  mapAppointmentRecord,
+} from '../utils/appointmentMapper';
+import { isOversizedInlineLaudoDataUrl } from '../utils/laudoLimits';
 import { mockAppointments } from '../utils/mockAppointments';
 
-/** Base64/data URLs above this size must not go into appointments row updates. */
-const MAX_INLINE_LAUDO_DATA_URL_CHARS = 200 * 1024;
+export { APPOINTMENT_ROW_SELECT, mapAppointmentRecord };
 
 function getFriendlyError(error) {
   if (!error) {
@@ -167,52 +171,6 @@ function mapAppointmentPayload(payload) {
     is_encaixe: Boolean(payload.isEncaixe),
     encaixe_created_at: payload.isEncaixe ? new Date().toISOString() : null,
     encaixe_created_by: payload.isEncaixe ? (payload.encaixeCreatedBy ?? payload.createdBy ?? null) : null,
-  };
-}
-
-export function mapAppointmentRecord(record) {
-  return {
-    id: record.id,
-    time: String(record.appointment_time).slice(0, 5),
-    status: record.status,
-    customerName: record.customer_name,
-    customerPhone: record.customer_phone,
-    customerCpf: record.customer_cpf,
-    customerZipCode: record.customer_zip_code,
-    customerEmail: record.customer_email,
-    customerAddress: record.customer_address,
-    sellerName: record.seller_name,
-    sellerEmail: record.seller_email,
-    vehiclePlate: record.vehicle_plate,
-    vehicleModel: record.vehicle_model,
-    vehicleYear: String(record.vehicle_year),
-    notes: record.notes,
-    appointmentDate: record.appointment_date,
-    cancellationRequestedAt: record.cancellation_requested_at,
-    cancellationRequestedBy: record.cancellation_requested_by,
-    cancellationRequestReason: record.cancellation_request_reason,
-    cancellationAdminApprovedAt: record.cancellation_admin_approved_at,
-    cancellationAdminApprovedBy: record.cancellation_admin_approved_by,
-    cancellationEvaluatorApprovedAt: record.cancellation_evaluator_approved_at,
-    cancellationEvaluatorApprovedBy: record.cancellation_evaluator_approved_by,
-    isVoucher: Boolean(record.is_voucher),
-    voucherApprovedAt: record.voucher_approved_at,
-    voucherApprovedBy: record.voucher_approved_by,
-    laudoResult: record.laudo_result,
-    laudoRejectionReason: record.laudo_rejection_reason,
-    laudoFileUrl: record.laudo_file_url,
-    laudoFileName: record.laudo_file_name,
-    laudoFinalizedAt: record.laudo_finalized_at,
-    laudoFinalizedBy: record.laudo_finalized_by,
-    originalAppointmentDate: record.original_appointment_date,
-    originalAppointmentTime: record.original_appointment_time
-      ? String(record.original_appointment_time).slice(0, 5)
-      : null,
-    rescheduledCount: record.rescheduled_count ?? 0,
-    createdBy: record.created_by,
-    isEncaixe: Boolean(record.is_encaixe),
-    encaixeCreatedAt: record.encaixe_created_at,
-    encaixeCreatedBy: record.encaixe_created_by,
   };
 }
 
@@ -973,7 +931,7 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
     return null;
   })();
 
-  if (normalizedLaudoFileUrl?.startsWith('data:') && normalizedLaudoFileUrl.length > MAX_INLINE_LAUDO_DATA_URL_CHARS) {
+  if (isOversizedInlineLaudoDataUrl(normalizedLaudoFileUrl)) {
     logFinalize('reject_inline_data_url', { chars: normalizedLaudoFileUrl.length });
     throw new Error(
       'Anexo em Base64 grande demais para gravar no banco. Conclua o upload no Storage (ou use uma URL https) e finalize sem reenviar o arquivo embutido.',
@@ -1001,7 +959,7 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
         .from('appointments')
         .update(updatePayload)
         .eq('id', appointmentId)
-        .select('id, status, laudo_result, laudo_finalized_at, laudo_file_url, laudo_file_name')
+        .select(APPOINTMENT_ROW_SELECT)
         .single();
       if (!error && data) {
         logFinalize('sdk_update_ok');
@@ -1060,15 +1018,17 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
 
   const { data, error } = await supabase
     .from('appointments')
-    .select('id, status, laudo_result, laudo_finalized_at, laudo_file_url, laudo_file_name, appointment_date, appointment_time, customer_name, customer_phone, customer_cpf, customer_zip_code, customer_email, customer_address, seller_name, seller_email, vehicle_plate, vehicle_model, vehicle_year, notes, company_id, created_by, is_voucher, is_encaixe, cancellation_requested_at, cancellation_requested_by, cancellation_request_reason')
+    .select(APPOINTMENT_ROW_SELECT)
     .eq('id', appointmentId)
     .single();
   if (error) {
     if (!sdkSuccess) throw getFriendlyError(error);
-    // se edge deu certo: retorna null, mas a operação foi concluída
-    return null;
+    // Edge concluiu, mas o SELECT falhou: não inventar registro incompleto para a UI.
+    logFinalize('post_edge_select_failed', { msg: String(error.message ?? '').slice(0, 160) });
+    throw getFriendlyError(error);
   }
-  return data ? mapAppointmentRecord(data) : null;
+  logFinalize('done');
+  return mapAppointmentRecord(data);
 }
 
 export async function approveVoucher(appointmentId, actor) {

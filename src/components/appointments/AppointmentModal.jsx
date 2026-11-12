@@ -159,27 +159,40 @@ export default function AppointmentModal({
     (async () => {
       setIsLoadingSellers(true);
       try {
+        // Vendedor não pode chamar get_active_sellers_of_my_company (403/42501).
+        // Preenche a partir do próprio perfil e preserva a restrição da RPC.
+        if (isSeller) {
+          const selfSeller = {
+            id: currentUser?.id,
+            fullName: currentUser?.fullName || currentUser?.email || 'Vendedor',
+            email: currentUser?.email || '',
+          };
+          setSellers(selfSeller.id ? [selfSeller] : []);
+          if (selfSeller.id) {
+            setSellerSelectValue(selfSeller.id);
+            setFormValues((prev) => ({
+              ...(prev || buildInitialValues(slotDetails, isEncaixeMode)),
+              sellerName: selfSeller.fullName,
+              sellerEmail: selfSeller.email,
+              sellerProfileId: selfSeller.id,
+            }));
+          } else {
+            setSellerSelectValue('');
+          }
+          return;
+        }
+
         const result = await getActiveSellers();
         const list = result.items || [];
         setSellers(list);
 
-        let selected = null;
-
-        if (isSeller) {
-          selected = findSellerByEmailOrId(list, {
-            email: currentUser.email,
-            id: currentUser.id,
-            name: currentUser.fullName,
-          });
-        } else {
-          selected = findSellerByEmailOrId(list, {
-            email: existingEmail,
-            id: existingSellerProfileId,
-            name: existingName,
-          });
-          if (!selected && list.length === 1) {
-            selected = list[0];
-          }
+        let selected = findSellerByEmailOrId(list, {
+          email: existingEmail,
+          id: existingSellerProfileId,
+          name: existingName,
+        });
+        if (!selected && list.length === 1) {
+          selected = list[0];
         }
 
         if (selected) {
