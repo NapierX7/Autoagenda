@@ -1,6 +1,10 @@
 import { format } from 'date-fns';
 import { hasSupabaseCredentials, supabase } from '../lib/supabase';
+import { assertMutableAppointmentId } from '../utils/appointmentIds';
 import { mockAppointments } from '../utils/mockAppointments';
+
+/** Base64/data URLs above this size must not go into appointments row updates. */
+const MAX_INLINE_LAUDO_DATA_URL_CHARS = 200 * 1024;
 
 function getFriendlyError(error) {
   if (!error) {
@@ -471,6 +475,7 @@ export async function createAppointment(payload) {
 }
 
 export async function updateAppointment(appointmentId, payload) {
+  assertMutableAppointmentId(appointmentId, 'atualizar agendamento');
   // Se estiver alterando a data/hora do agendamento, NAO permite jogar para horario passado.
   // (Permite manter a mesma data hora original, mesmo que ja esteja passado, p/ finalizar laudos etc.)
   if (payload && (payload.appointmentDate || payload.appointmentTime)) {
@@ -525,6 +530,7 @@ export async function updateAppointment(appointmentId, payload) {
 }
 
 export async function rescheduleAppointment(appointmentId, newDate, newTime, payload) {
+  assertMutableAppointmentId(appointmentId, 'reagendar');
   if (isPastAppointment(newDate, newTime)) {
     throw new Error('Nao e permitido reagendar para um horario que ja passou. Escolha outra data ou horario futuro.');
   }
@@ -586,6 +592,7 @@ export async function rescheduleAppointment(appointmentId, newDate, newTime, pay
 }
 
 export async function cancelAppointment(appointmentId, actor = null) {
+  assertMutableAppointmentId(appointmentId, 'cancelar');
   if (!hasSupabaseCredentials || !supabase) {
     const target = mockAppointments.find((item) => item.id === appointmentId);
 
@@ -703,6 +710,7 @@ export async function cancelAppointment(appointmentId, actor = null) {
 }
 
 export async function deleteAppointment(appointmentId, actor) {
+  assertMutableAppointmentId(appointmentId, 'excluir');
   if (!actor?.role || actor.role !== 'admin') {
     throw new Error('A exclusão de agendamentos é permitida apenas para gerentes.');
   }
@@ -729,6 +737,7 @@ export async function deleteAppointment(appointmentId, actor) {
 }
 
 export async function requestCancellationApproval(appointmentId, actor, reason = '') {
+  assertMutableAppointmentId(appointmentId, 'solicitar cancelamento');
   if (!reason || reason.trim().length < 3) {
     throw new Error('Informe o motivo do cancelamento antes de prosseguir.');
   }
@@ -810,6 +819,7 @@ export async function requestCancellationApproval(appointmentId, actor, reason =
 }
 
 export async function approveCancellationRequest(appointmentId, actor) {
+  assertMutableAppointmentId(appointmentId, 'aprovar cancelamento');
   if (!actor?.role || !['admin', 'evaluator'].includes(actor.role)) {
     throw new Error('A aprovação de cancelamento é permitida apenas para gerente ou avaliador.');
   }
@@ -905,7 +915,18 @@ export async function approveCancellationRequest(appointmentId, actor) {
 }
 
 export async function finalizeAppointment(appointmentId, actor, finalizePayload = {}) {
+  assertMutableAppointmentId(appointmentId, 'finalizar laudo');
   const { result, rejectionReason, laudoFileUrl, laudoFileName } = finalizePayload;
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const logFinalize = (stage, extra = {}) => {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    console.info('[finalizeAppointment]', {
+      stage,
+      appointmentId,
+      elapsedMs: Math.round(now - startedAt),
+      ...extra,
+    });
+  };
 
   if (!result || !['approved', 'rejected'].includes(result)) {
     throw new Error('Informe se o laudo foi aprovado ou reprovado.');
@@ -952,6 +973,13 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
     return null;
   })();
 
+  if (normalizedLaudoFileUrl?.startsWith('data:') && normalizedLaudoFileUrl.length > MAX_INLINE_LAUDO_DATA_URL_CHARS) {
+    logFinalize('reject_inline_data_url', { chars: normalizedLaudoFileUrl.length });
+    throw new Error(
+      'Anexo em Base64 grande demais para gravar no banco. Conclua o upload no Storage (ou use uma URL https) e finalize sem reenviar o arquivo embutido.',
+    );
+  }
+
   if (normalizedLaudoFileUrl) {
     updatePayload.laudo_file_url = normalizedLaudoFileUrl;
   }
@@ -959,37 +987,57 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
     updatePayload.laudo_file_name = laudoFileName.trim();
   }
 
+  const hasInlineDataUrl = Boolean(normalizedLaudoFileUrl?.startsWith('data:'));
+  // data: URLs devem ir pela Edge só se forem pequenas; preferir não tentar SDK com payload pesado.
+  const skipSdk = hasInlineDataUrl;
+
   // FALLBACK 3 CAMADAS (igual cancelamento):
-  // (1) SDK direto via RLS, (2) se 42501 cai Edge, (3) se action desconhecida retorna dado via .select()
+  // (1) SDK direto via RLS, (2) se 42501/timeout cai Edge, (3) select final
   let sdkSuccess = false;
-  try {
-    const { data, error } = await supabase
-      .from('appointments')
-      .update(updatePayload)
-      .eq('id', appointmentId)
-      .select()
-      .single();
-    if (!error && data) {
-      return mapAppointmentRecord(data);
-    }
-    if (error) {
-      const code = String(error.code ?? '').toLowerCase();
-      const msg = String(error.message ?? '').toLowerCase();
-      const blockRls = code === '42501' || msg.includes('row-level security') || msg.includes('permission denied');
-      if (!blockRls) {
-        throw getFriendlyError(error);
+  if (!skipSdk) {
+    logFinalize('sdk_update_start');
+    try {
+      const { data, error } = await supabase
+        .from('appointments')
+        .update(updatePayload)
+        .eq('id', appointmentId)
+        .select('id, status, laudo_result, laudo_finalized_at, laudo_file_url, laudo_file_name')
+        .single();
+      if (!error && data) {
+        logFinalize('sdk_update_ok');
+        return mapAppointmentRecord(data);
       }
-      // bloqueio RLS: segue para edge
+      if (error) {
+        const code = String(error.code ?? '').toLowerCase();
+        const msg = String(error.message ?? '').toLowerCase();
+        const blockRls = code === '42501' || msg.includes('row-level security') || msg.includes('permission denied');
+        const isTimeout = msg.includes('timeout') || msg.includes('canceling statement');
+        logFinalize('sdk_update_error', { code, msg: String(error.message ?? '').slice(0, 160), blockRls, isTimeout });
+        if (!blockRls && !isTimeout) {
+          throw getFriendlyError(error);
+        }
+        // RLS ou timeout: tenta Edge
+      }
+    } catch (sdkErr) {
+      const friendly = getFriendlyError(sdkErr);
+      const msg = String(friendly?.message ?? '').toLowerCase();
+      const isTimeout = msg.includes('timeout') || msg.includes('canceling statement') || msg.includes('30 segundos');
+      logFinalize('sdk_update_exception', { msg: String(friendly?.message ?? '').slice(0, 160), isTimeout });
+      if (
+        !msg.includes('permissão') &&
+        !msg.includes('permission denied') &&
+        !msg.includes('42501') &&
+        !isTimeout
+      ) {
+        throw friendly;
+      }
     }
-  } catch (sdkErr) {
-    const friendly = getFriendlyError(sdkErr);
-    const msg = String(friendly?.message ?? '').toLowerCase();
-    if (!msg.includes('permissão') && !msg.includes('permission denied') && !msg.includes('42501')) {
-      throw friendly;
-    }
+  } else {
+    logFinalize('sdk_skipped_inline_data_url');
   }
 
   try {
+    logFinalize('edge_finalize_start', { hasFileUrl: Boolean(normalizedLaudoFileUrl) });
     await callUserAdminActions({
       action: 'finalize-appointment',
       appointmentId,
@@ -999,9 +1047,11 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
       laudoFileName: laudoFileName && typeof laudoFileName === 'string' ? laudoFileName.trim() : undefined,
     });
     sdkSuccess = true;
+    logFinalize('edge_finalize_ok');
   } catch (invokeErr) {
     const errMsg = String(invokeErr?.message ?? '').toLowerCase();
     const isUnknownAction = errMsg.includes('ação inválida') || errMsg.includes('aca(c̃)o inva(lida|lida)') || errMsg.includes('action inv') || invokeErr?.status === 400;
+    logFinalize('edge_finalize_error', { msg: String(invokeErr?.message ?? '').slice(0, 160) });
     if (!isUnknownAction) {
       throw getFriendlyError(invokeErr);
     }
@@ -1010,7 +1060,7 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
 
   const { data, error } = await supabase
     .from('appointments')
-    .select()
+    .select('id, status, laudo_result, laudo_finalized_at, laudo_file_url, laudo_file_name, appointment_date, appointment_time, customer_name, customer_phone, customer_cpf, customer_zip_code, customer_email, customer_address, seller_name, seller_email, vehicle_plate, vehicle_model, vehicle_year, notes, company_id, created_by, is_voucher, is_encaixe, cancellation_requested_at, cancellation_requested_by, cancellation_request_reason')
     .eq('id', appointmentId)
     .single();
   if (error) {
@@ -1022,6 +1072,7 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
 }
 
 export async function approveVoucher(appointmentId, actor) {
+  assertMutableAppointmentId(appointmentId, 'aprovar voucher');
   if (!actor?.role || actor.role !== 'admin') {
     throw new Error('A aprovação de voucher é permitida apenas para gerentes.');
   }

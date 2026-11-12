@@ -95,29 +95,38 @@ export default function FinalizeModal({
             storageError && typeof storageError.message === 'string' ? storageError.message : '';
           const bucketNotFound =
             storageMessage.includes('Bucket') && storageMessage.includes('laudos');
-          if (file.size > base64FallbackMaxSize) {
+          // Base64 no banco causa timeouts em finalização; só permite arquivos bem pequenos.
+          const safeInlineMax = Math.min(base64FallbackMaxSize, 150 * 1024);
+          if (file.size > safeInlineMax) {
             if (bucketNotFound) {
               throw new Error(
-                `Bucket "laudos" não está configurado no Supabase Storage e o arquivo é grande (${formatBytes(file.size)}). ` +
-                  `Crie o bucket (recomendado) ou use um arquivo com até ${formatBytes(base64FallbackMaxSize)} para o modo compatível.`,
+                `Bucket "laudos" não está configurado no Supabase Storage. ` +
+                  `Configure o Storage antes de anexar arquivos maiores que ${formatBytes(safeInlineMax)}, ` +
+                  `ou cole uma URL https do arquivo.`,
               );
             }
             throw new Error(
               storageMessage ||
-                `Falha ao enviar para o Storage e arquivo muito grande para fallback (${formatBytes(file.size)} > ${formatBytes(base64FallbackMaxSize)}).`,
+                `Falha no upload do Storage. Não use Base64 para arquivos > ${formatBytes(safeInlineMax)} — isso trava a finalização.`,
             );
           }
-          setUploadStage('Modo compatível (Base64)…');
+          setUploadStage('Modo compatível (Base64 curto)…');
           setUploadProgress(40);
         }
       }
 
-      const base64 = await fileToBase64(file, base64FallbackMaxSize);
+      const safeInlineMax = Math.min(base64FallbackMaxSize, 150 * 1024);
+      if (file.size > safeInlineMax) {
+        throw new Error(
+          `Arquivo acima de ${formatBytes(safeInlineMax)} exige Storage ou URL https. Upload e finalização devem ser feitos sem embutir Base64 no banco.`,
+        );
+      }
+      const base64 = await fileToBase64(file, safeInlineMax);
       if (abortSignalRef.current) return;
       setLaudoFileUrl(base64);
       setUploadSource('base64');
       setUploadProgress(100);
-      setUploadStage('Pronto ✅ (modo compatível)');
+      setUploadStage('Pronto ✅ (modo compatível curto)');
     } catch (err) {
       if (abortSignalRef.current) return;
       clearFile();
@@ -133,6 +142,13 @@ export default function FinalizeModal({
 
     if (uploading) {
       setLocalError('Aguarde o upload do arquivo terminar antes de confirmar.');
+      return;
+    }
+
+    if (laudoFileUrl?.startsWith('data:') && laudoFileUrl.length > 200 * 1024) {
+      setLocalError(
+        'Anexo Base64 grande demais para finalizar. Refaça o upload via Storage ou informe uma URL https, depois confirme a finalização.',
+      );
       return;
     }
 

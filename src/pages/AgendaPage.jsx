@@ -6,6 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useCompanySettings } from '../hooks/useCompanySettings';
 import { useWeeklyAvailability } from '../hooks/useWeeklyAvailability';
 import { countVisibleSlots, filterBoard } from '../utils/appointmentFilters';
+import { isOccupancyOnlySelection } from '../utils/appointmentIds';
 import { getWeekScopeDescription } from '../utils/scheduleConfig';
 
 export default function AgendaPage() {
@@ -485,13 +486,18 @@ export default function AgendaPage() {
               board={filteredBoard}
               title={`Agenda operacional • ${weekContextLabel.toLowerCase()}`}
               isManager={canMakeEncaixe}
-              onSlotSelect={(slot) => {
-                // Ocupação sem PII (outros vendedores): não abre modal de edição.
-                if (slot?.appointment?.isOccupancyOnly) {
+              onSlotSelect={(selection) => {
+                // WeeklySchedulePreview envia { day, slot }; appointment fica em selection.slot.appointment.
+                if (isOccupancyOnlySelection(selection)) {
+                  showToast({
+                    title: 'Horário restrito',
+                    message: 'Este cartão só indica ocupação. Detalhes e edição ficam com o responsável.',
+                    tone: 'warning',
+                  });
                   return;
                 }
                 setIsEncaixeMode(false);
-                setSelectedSlot(slot);
+                setSelectedSlot(selection);
               }}
               onEncaixeSelect={handleEncaixeSelect}
             />

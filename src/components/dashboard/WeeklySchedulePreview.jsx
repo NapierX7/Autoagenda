@@ -121,6 +121,7 @@ export default function WeeklySchedulePreview({
                         <div className="slot-group">
                           {appointments.map((appt) => {
                             const isEncaixe = Boolean(appt.isEncaixe);
+                            const isOccupancyOnly = Boolean(appt.isOccupancyOnly);
                             const workflow = (() => {
                               if (appt.status === 'cancelled') return 'expired';
                               if (appt.status === 'completed') return 'finalized';
@@ -134,15 +135,35 @@ export default function WeeklySchedulePreview({
                               <button
                                 key={appt.id}
                                 type="button"
-                                className={`slot-card ${workflow} ${isEncaixe ? 'is-encaixe' : ''}`}
-                                onClick={() => onSlotSelect?.({
-                                  day,
-                                  slot: {
-                                    ...slot,
-                                    appointment: appt,
-                                    status: workflow,
-                                  },
-                                })}
+                                className={`slot-card ${workflow} ${isEncaixe ? 'is-encaixe' : ''} ${isOccupancyOnly ? 'is-occupancy-only' : ''}`}
+                                aria-disabled={isOccupancyOnly}
+                                title={
+                                  isOccupancyOnly
+                                    ? 'Horário ocupado — detalhes restritos ao responsável'
+                                    : undefined
+                                }
+                                onClick={() => {
+                                  if (isOccupancyOnly) {
+                                    // Ainda notifica o pai para toast/UX, mas não deve abrir edição.
+                                    onSlotSelect?.({
+                                      day,
+                                      slot: {
+                                        ...slot,
+                                        appointment: appt,
+                                        status: workflow,
+                                      },
+                                    });
+                                    return;
+                                  }
+                                  onSlotSelect?.({
+                                    day,
+                                    slot: {
+                                      ...slot,
+                                      appointment: appt,
+                                      status: workflow,
+                                    },
+                                  });
+                                }}
                               >
                                 <span className="slot-time">{slot.time}</span>
                                 <span className="slot-body">{renderCell(appt)}</span>

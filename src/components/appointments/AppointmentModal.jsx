@@ -7,6 +7,7 @@ import {
   normalizePhone,
   normalizePlate,
 } from '../../utils/formatters';
+import { isOccupancyOnlySelection } from '../../utils/appointmentIds';
 import { fetchAddressByCep } from '../../services/cepService';
 import { getActiveSellers } from '../../services/appointmentsService';
 import { getCancellationApprovalState, isCancellationPending } from '../../utils/appointmentStatus';
@@ -252,6 +253,36 @@ export default function AppointmentModal({
 
   if (!isOpen || !slotDetails) {
     return null;
+  }
+
+  if (isOccupancyOnlySelection(slotDetails)) {
+    return (
+      <div className="modal-backdrop" role="presentation" onClick={onClose}>
+        <section
+          className="modal-panel small-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="occupancy-only-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <header className="modal-header">
+            <div>
+              <span className="section-tag">Horário ocupado</span>
+              <h2 id="occupancy-only-title">Detalhes restritos</h2>
+              <p>Este cartão só indica disponibilidade. Não é um agendamento editável.</p>
+            </div>
+            <button type="button" className="icon-button" onClick={onClose} aria-label="Fechar modal">
+              ✕
+            </button>
+          </header>
+          <footer className="modal-actions">
+            <button type="button" className="ghost-button" onClick={onClose}>
+              Fechar
+            </button>
+          </footer>
+        </section>
+      </div>
+    );
   }
 
   if (!formValues) {
