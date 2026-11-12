@@ -212,6 +212,54 @@ export function mapAppointmentRecord(record) {
   };
 }
 
+function mapOccupancyPlaceholder(row, index = 0) {
+  const date = row.appointment_date;
+  const time = String(row.appointment_time).slice(0, 5);
+  const status = row.status === 'completed' ? 'completed' : 'scheduled';
+  return {
+    id: `occupancy:${date}:${time}:${index}`,
+    time,
+    status,
+    customerName: 'Horário ocupado',
+    customerPhone: '',
+    customerCpf: null,
+    customerZipCode: null,
+    customerEmail: null,
+    customerAddress: null,
+    sellerName: '',
+    sellerEmail: null,
+    vehiclePlate: '',
+    vehicleModel: '',
+    vehicleYear: '',
+    notes: null,
+    appointmentDate: date,
+    cancellationRequestedAt: null,
+    cancellationRequestedBy: null,
+    cancellationRequestReason: null,
+    cancellationAdminApprovedAt: null,
+    cancellationAdminApprovedBy: null,
+    cancellationEvaluatorApprovedAt: null,
+    cancellationEvaluatorApprovedBy: null,
+    isVoucher: false,
+    voucherApprovedAt: null,
+    voucherApprovedBy: null,
+    laudoResult: null,
+    laudoRejectionReason: null,
+    laudoFileUrl: null,
+    laudoFileName: null,
+    laudoFinalizedAt: null,
+    laudoFinalizedBy: null,
+    originalAppointmentDate: null,
+    originalAppointmentTime: null,
+    rescheduledCount: 0,
+    createdBy: null,
+    isEncaixe: Boolean(row.is_encaixe),
+    encaixeCreatedAt: null,
+    encaixeCreatedBy: null,
+    isOccupancyOnly: true,
+  };
+}
+
 export async function getAppointmentsByWeek(weekDays) {
   if (!hasSupabaseCredentials || !supabase) {
     return {
@@ -275,8 +323,40 @@ export async function getAppointmentsByWeek(weekDays) {
     throw getFriendlyError(error);
   }
 
+  const visibleItems = (data || []).map(mapAppointmentRecord);
+
+  // Seller (e qualquer papel sob RLS restrito): completa a grade com ocupação sem PII.
+  const { data: occupancy, error: occupancyError } = await supabase.rpc(
+    'get_company_slot_occupancy',
+    { p_start_date: startDate, p_end_date: endDate },
+  );
+
+  if (occupancyError) {
+    // Staff com SELECT completo não depende da RPC; sellers precisam dela.
+    // Se a RPC falhar, devolve só o que o RLS permitiu (sem inventar slots).
+    return {
+      items: visibleItems,
+      source: 'supabase',
+      occupancyError: occupancyError.message,
+    };
+  }
+
+  const ownedKeys = new Set(
+    visibleItems.map((item) => `${item.appointmentDate}|${item.time}|${item.status}`),
+  );
+
+  const placeholders = [];
+  (occupancy || []).forEach((row, index) => {
+    if (row.is_mine) return;
+    const time = String(row.appointment_time).slice(0, 5);
+    const status = row.status === 'completed' ? 'completed' : 'scheduled';
+    const key = `${row.appointment_date}|${time}|${status}`;
+    if (ownedKeys.has(key)) return;
+    placeholders.push(mapOccupancyPlaceholder(row, index));
+  });
+
   return {
-    items: data.map(mapAppointmentRecord),
+    items: [...visibleItems, ...placeholders],
     source: 'supabase',
   };
 }
@@ -1054,15 +1134,34 @@ export async function getCompanyProfiles() {
 }
 
 export async function getActiveSellers() {
-  const result = await getCompanyProfiles();
-  const sellers = (result.items || []).filter((p) =>
-    String(p.role).toLowerCase() === 'seller'
-    && p.isActive === true
-    && String(p.approvalStatus).toLowerCase() === 'approved'
-    && Boolean(p.email),
-  );
+  if (!hasSupabaseCredentials || !supabase) {
+    return {
+      items: [
+        { id: 'seller-demo-1', fullName: 'Vendedor Demo 1', email: 'vendedor1@demo.com' },
+        { id: 'seller-demo-2', fullName: 'Vendedor Demo 2', email: 'vendedor2@demo.com' },
+      ],
+      source: 'mock',
+    };
+  }
+
+  const { data, error } = await supabase.rpc('get_active_sellers_of_my_company');
+  if (error) {
+    throw getFriendlyError(error);
+  }
+
+  const sellers = (data || [])
+    .map((item) => ({
+      id: item.id,
+      fullName: item.full_name,
+      email: item.email,
+      role: 'seller',
+      approvalStatus: 'approved',
+      isActive: true,
+    }))
+    .filter((p) => Boolean(p.email));
+
   sellers.sort((a, b) => String(a.fullName || '').localeCompare(String(b.fullName || ''), 'pt-BR'));
-  return { items: sellers, source: result.source };
+  return { items: sellers, source: 'supabase' };
 }
 
 function validateSellerInfo(payload, { allowNull = false } = {}) {

@@ -1,58 +1,54 @@
-// Edge Function: create-seller
-// Local: supabase/functions/create-seller/index.ts
-// Publica com: supabase functions deploy create-seller --project-ref adyzxvkrrdrpkqxjtrxj
+// ================================================================
+// INLINE_create-seller.ts — Versão PARA COLAR NO EDITOR INLINE
+// DO SUPABASE (Dashboard → Edge Functions → create-seller → Edit)
 //
-// Objetivo: backend-side criar usuario + profile (usa service_role key segura,
-// evitando o erro "This endpoint requires a valid Bearer token" do frontend)
-//
-// Suporta perfis: seller (vendedor) ou evaluator (avaliador) - NUNCA admin por aqui.
+// NÃO TEM IMPORTS DE _shared/ (não funciona no Editor Inline).
+// Todo o CORS e demais lógicas estão embutidas aqui.
+// ================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { corsHeaders } from '../_shared/cors.ts';
 
-// ======= VALIDACOES ==========================================================
-function isValidEmail(e: unknown): e is string {
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+};
+
+function isValidEmail(e) {
   return typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
-
-function isValidPassword(p: unknown): p is string {
+function isValidPassword(p) {
   return typeof p === 'string' && p.length >= 6;
 }
-
-function isValidUuid(s: unknown): s is string {
+function isValidUuid(s) {
   if (typeof s !== 'string') return false;
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
-
-function isValidRole(r: unknown): r is 'seller' | 'evaluator' {
+function isValidRole(r) {
   return r === 'seller' || r === 'evaluator';
 }
-
-function getRoleLabel(r: 'seller' | 'evaluator') {
+function getRoleLabel(r) {
   return r === 'seller' ? 'vendedor' : 'avaliador';
 }
 
 serve(async (req) => {
-  // CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: CORS_HEADERS });
   }
 
   try {
-    // 1) Service role client (seguro - server side apenas)
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
       { auth: { autoRefreshToken: false, persistSession: false } },
     );
 
-    // 2) Valida autorizacao do chamador (tem que ser user logado + admin)
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
         JSON.stringify({ error: 'Autenticacao necessaria.' }),
-        { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 401, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
     const token = authHeader.substring('Bearer '.length);
@@ -60,70 +56,74 @@ serve(async (req) => {
     if (jwtErr || !userData?.user?.id) {
       return new Response(
         JSON.stringify({ error: 'Token invalido ou expirado.' }),
-        { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 401, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
 
-    // Verifica se o chamador e admin
     const { data: callerProfile } = await supabaseAdmin
       .from('profiles')
-      .select('role, company_id')
+      .select('role, company_id, full_name, approval_status, is_active')
       .eq('id', userData.user.id)
       .single();
 
     if (!callerProfile || !['admin'].includes(String(callerProfile.role))) {
       return new Response(
         JSON.stringify({ error: 'Apenas gerentes podem criar novos usuarios.' }),
-        { status: 403, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 403, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
+      );
+    }
+    if (
+      String(callerProfile.approval_status ?? '') !== 'approved' ||
+      callerProfile.is_active !== true
+    ) {
+      return new Response(
+        JSON.stringify({ error: 'Conta sem acesso empresarial ativo.' }),
+        { status: 403, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
 
-    // 3) Parse + validacao body payload
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const email    = body.email;
     const password = body.password;
     const fullName = body.fullName;
     const rawRole  = body.role;
-    // Preferencia: usa companyId do payload ou assume a company do admin (multi-tenant safe)
     const companyId = body.companyId ?? callerProfile.company_id;
 
     if (!isValidEmail(email)) {
       return new Response(
         JSON.stringify({ error: 'Email invalido.' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
     if (!isValidPassword(password)) {
       return new Response(
         JSON.stringify({ error: 'A senha precisa ter pelo menos 6 caracteres.' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
     if (typeof fullName !== 'string' || fullName.trim().length < 3) {
       return new Response(
         JSON.stringify({ error: 'Informe o nome completo (minimo 3 letras).' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
-    // Valida role (apenas seller ou evaluator - seguranca: admin nunca por aqui)
     if (!isValidRole(rawRole)) {
       return new Response(
         JSON.stringify({ error: 'Perfil invalido. Escolha "seller" ou "evaluator".' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
-    const targetRole: 'seller' | 'evaluator' = rawRole;
+    const targetRole = rawRole;
     if (!isValidUuid(companyId)) {
       return new Response(
         JSON.stringify({ error: 'Empresa invalida (companyId).' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
-    // Garante que o admin so cria user na PROPRIA empresa (tenant isolation)
     if (String(companyId) !== String(callerProfile.company_id)) {
       return new Response(
         JSON.stringify({ error: 'Voce so pode criar usuarios para a sua propria empresa.' }),
-        { status: 403, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 403, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
     const { count: companyCount, error: companyErr } = await supabaseAdmin
@@ -133,11 +133,10 @@ serve(async (req) => {
     if (companyErr || (companyCount ?? 0) < 1) {
       return new Response(
         JSON.stringify({ error: 'Empresa informada nao existe.' }),
-        { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
 
-    // 4) Cria usuario no auth.users (confirmado - sem email de confirmacao)
     const { data: createdAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
       email: email,
       password: password,
@@ -150,14 +149,11 @@ serve(async (req) => {
     });
     if (createErr || !createdAuth?.user?.id) {
       return new Response(
-        JSON.stringify({ error: (createErr as any)?.message ?? 'Erro ao criar usuario. Email ja pode estar cadastrado.' }),
-        { status: 409, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        JSON.stringify({ error: (createErr && createErr.message) ? createErr.message : 'Erro ao criar usuario. Email ja pode estar cadastrado.' }),
+        { status: 409, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
 
-    // 5) Cria profile (upsert - seguro)
-    //    Nota: approval_status='approved' e is_active=true pois o GERENTE esta criando
-    //    (diferente do self-service request-seller-access que cria como 'pending')
     const { error: profileErr } = await supabaseAdmin.from('profiles').upsert({
       id: createdAuth.user.id,
       email: email,
@@ -170,15 +166,15 @@ serve(async (req) => {
     }, { onConflict: 'id' });
 
     if (profileErr) {
-      // Fallback seguro: apaga o auth user se o profile falhar, evita dangling user
-      await supabaseAdmin.auth.admin.deleteUser(createdAuth.user.id).catch(() => {});
+      try {
+        await supabaseAdmin.auth.admin.deleteUser(createdAuth.user.id);
+      } catch (_cleanupErr) { /* ignora */ }
       return new Response(
-        JSON.stringify({ error: (profileErr as any)?.message ?? 'Erro ao criar perfil.' }),
-        { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+        JSON.stringify({ error: (profileErr && profileErr.message) ? profileErr.message : 'Erro ao criar perfil.' }),
+        { status: 500, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
       );
     }
 
-    // 6) Sucesso
     return new Response(
       JSON.stringify({
         success: true,
@@ -188,13 +184,13 @@ serve(async (req) => {
         role: targetRole,
         message: `Conta de ${getRoleLabel(targetRole)} criada com sucesso. Ele ja pode logar.`,
       }),
-      { status: 201, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+      { status: 201, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
     );
-  } catch (e: any) {
+  } catch (e) {
     console.error('create-seller fatal:', e?.message ?? e);
     return new Response(
-      JSON.stringify({ error: e?.message ?? 'Erro interno do servidor.' }),
-      { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } },
+      JSON.stringify({ error: (e && e.message) ? e.message : 'Erro interno do servidor.' }),
+      { status: 500, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } },
     );
   }
 });

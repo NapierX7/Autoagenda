@@ -486,6 +486,10 @@ export default function AgendaPage() {
               title={`Agenda operacional • ${weekContextLabel.toLowerCase()}`}
               isManager={canMakeEncaixe}
               onSlotSelect={(slot) => {
+                // Ocupação sem PII (outros vendedores): não abre modal de edição.
+                if (slot?.appointment?.isOccupancyOnly) {
+                  return;
+                }
                 setIsEncaixeMode(false);
                 setSelectedSlot(slot);
               }}

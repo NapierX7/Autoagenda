@@ -23,6 +23,16 @@ function renderCell(appointment) {
     };
   })();
 
+  if (appointment.isOccupancyOnly) {
+    return (
+      <>
+        <span className={`slot-status ${workflow.cls}`}>{workflow.label}</span>
+        <strong>Horário ocupado</strong>
+        <small>Detalhes restritos ao responsável</small>
+      </>
+    );
+  }
+
   return (
     <>
       <span className={`slot-status ${workflow.cls}`}>{workflow.label}</span>
