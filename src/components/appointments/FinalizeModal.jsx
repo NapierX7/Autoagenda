@@ -83,11 +83,12 @@ export default function FinalizeModal({
               if (abortSignalRef.current) return;
               setUploadProgress(Math.min(95, percent));
               if (stage === 'uploading') setUploadStage('Enviando para o Storage…');
-              if (stage === 'generating-url') setUploadStage('Gerando link assinado/público…');
+              if (stage === 'done') setUploadStage('Arquivo salvo (path permanente)…');
             },
           );
           if (abortSignalRef.current) return;
-          setLaudoFileUrl(uploaded.publicUrl);
+          // Persistir path do Storage — signed URL só na visualização.
+          setLaudoFileUrl(uploaded.storagePath);
           setLaudoFileName(uploaded.fileName || file.name);
           setUploadSource('storage');
           setUploadProgress(100);

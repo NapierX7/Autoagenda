@@ -6,6 +6,7 @@ import {
   mapAppointmentRecord,
 } from '../utils/appointmentMapper';
 import { isOversizedInlineLaudoDataUrl } from '../utils/laudoLimits';
+import { toPersistedLaudoRef } from '../utils/laudoRefs';
 import { mockAppointments } from '../utils/mockAppointments';
 
 export { APPOINTMENT_ROW_SELECT, mapAppointmentRecord };
@@ -920,16 +921,8 @@ export async function finalizeAppointment(appointmentId, actor, finalizePayload 
     laudo_finalized_by: actor?.id ?? null,
   };
 
-  const normalizedLaudoFileUrl = (() => {
-    if (!laudoFileUrl) return null;
-    if (typeof laudoFileUrl !== 'string') return null;
-    const trimmed = laudoFileUrl.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-      return trimmed;
-    }
-    return null;
-  })();
+  // Path de Storage (durável) | https externa | data: curta — nunca signed URL temporária.
+  const normalizedLaudoFileUrl = toPersistedLaudoRef(laudoFileUrl);
 
   if (isOversizedInlineLaudoDataUrl(normalizedLaudoFileUrl)) {
     logFinalize('reject_inline_data_url', { chars: normalizedLaudoFileUrl.length });

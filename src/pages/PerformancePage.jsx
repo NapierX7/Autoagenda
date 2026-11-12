@@ -15,6 +15,8 @@ import {
   startOfDay,
 } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { openLaudoInNewTab } from '../services/laudosStorageService';
+import { isInlineLaudoDataUrl } from '../utils/laudoRefs';
 
 function downloadBase64File(base64Url, filename) {
   try {
@@ -49,9 +51,9 @@ function downloadBase64File(base64Url, filename) {
   }
 }
 
-function handleLaudoDownload(laudoFileUrl, laudoFileName, showToastFallback) {
+async function handleLaudoDownload(laudoFileUrl, laudoFileName, showToastFallback) {
   if (!laudoFileUrl) return;
-  if (laudoFileUrl.startsWith('data:')) {
+  if (isInlineLaudoDataUrl(laudoFileUrl)) {
     const ok = downloadBase64File(laudoFileUrl, laudoFileName || 'laudo.pdf');
     if (!ok && showToastFallback) {
       showToastFallback({
@@ -60,8 +62,18 @@ function handleLaudoDownload(laudoFileUrl, laudoFileName, showToastFallback) {
         tone: 'warning',
       });
     }
-  } else {
-    window.open(laudoFileUrl, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  try {
+    await openLaudoInNewTab(laudoFileUrl);
+  } catch (err) {
+    if (showToastFallback) {
+      showToastFallback({
+        title: 'Não foi possível abrir o laudo',
+        message: err?.message || 'Tente novamente após relogar.',
+        tone: 'warning',
+      });
+    }
   }
 }
 
@@ -468,14 +480,13 @@ export default function PerformancePage() {
                                   >
                                     📥 Baixar laudo
                                   </button>
-                                  <a
+                                  <button
+                                    type="button"
                                     className="ghost-button"
-                                    href={apt.laudoFileUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                    onClick={() => handleLaudoDownload(apt.laudoFileUrl, apt.laudoFileName, showToast)}
                                   >
                                     👁️ Visualizar
-                                  </a>
+                                  </button>
                                 </>
                               )}
                               {!apt.laudoFileUrl && apt.status === 'completed' && (
@@ -580,14 +591,13 @@ export default function PerformancePage() {
                             )}
                             <div className="card-actions-end">
                               {apt.laudoFileUrl && (
-                                <a
+                                <button
+                                  type="button"
                                   className="primary-button"
-                                  href={apt.laudoFileUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                                  onClick={() => handleLaudoDownload(apt.laudoFileUrl, apt.laudoFileName, showToast)}
                                 >
                                   📄 {apt.laudoFileName || 'Abrir laudo'}
-                                </a>
+                                </button>
                               )}
                             </div>
                           </div>

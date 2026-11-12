@@ -13,6 +13,8 @@ import { getActiveSellers } from '../../services/appointmentsService';
 import { getCancellationApprovalState, isCancellationPending } from '../../utils/appointmentStatus';
 import RescheduleModal from './RescheduleModal';
 import FinalizeModal from './FinalizeModal';
+import { openLaudoInNewTab } from '../../services/laudosStorageService';
+import { isStorageLaudoRef } from '../../utils/laudoRefs';
 
 function buildInitialValues(slotDetails, isEncaixeMode = false) {
   return {
@@ -807,14 +809,32 @@ export default function AppointmentModal({
             <div className="auth-message info">
               <strong>Arquivo do laudo.</strong>
               <span>
-                <a
-                  href={appointment.laudoFileUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ghost-link inline-link"
-                >
-                  {appointment.laudoFileName || 'Abrir arquivo do laudo'}
-                </a>
+                {isStorageLaudoRef(appointment.laudoFileUrl) ||
+                appointment.laudoFileUrl.startsWith('data:') ? (
+                  <button
+                    type="button"
+                    className="ghost-link inline-link"
+                    onClick={async (event) => {
+                      event.preventDefault();
+                      try {
+                        await openLaudoInNewTab(appointment.laudoFileUrl);
+                      } catch (err) {
+                        window.alert(err?.message || 'Não foi possível abrir o laudo.');
+                      }
+                    }}
+                  >
+                    {appointment.laudoFileName || 'Abrir arquivo do laudo'}
+                  </button>
+                ) : (
+                  <a
+                    href={appointment.laudoFileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ghost-link inline-link"
+                  >
+                    {appointment.laudoFileName || 'Abrir arquivo do laudo'}
+                  </a>
+                )}
               </span>
             </div>
           )}

@@ -4,12 +4,26 @@ import {
   isOversizedInlineLaudoDataUrl,
   LAUDO_LIMITS,
 } from '../utils/laudoLimits';
+import {
+  isExternalLaudoUrl,
+  isInlineLaudoDataUrl,
+  toLaudoStoragePath,
+  toPersistedLaudoRef,
+} from '../utils/laudoRefs';
 
 export { formatBytes, isOversizedInlineLaudoDataUrl, LAUDO_LIMITS };
+export {
+  isExternalLaudoUrl,
+  isInlineLaudoDataUrl,
+  toLaudoStoragePath,
+  toPersistedLaudoRef,
+};
 
 const LAUDOS_BUCKET = LAUDO_LIMITS.STORAGE_BUCKET;
 const MAX_STORAGE_UPLOAD_BYTES = LAUDO_LIMITS.MAX_STORAGE_UPLOAD_BYTES;
 const FALLBACK_MAX_BASE64_BYTES = LAUDO_LIMITS.MAX_INLINE_FILE_BYTES;
+/** Tempo de vida do link assinado (não persiste no banco). */
+export const LAUDO_SIGNED_URL_EXPIRES_IN = 60 * 60;
 
 function sanitizePathPart(value = '') {
   return String(value)
@@ -87,19 +101,17 @@ export async function uploadLaudoToStorage(
       throw new Error(error.message || 'Falha ao enviar arquivo para o Storage.');
     }
 
-    if (typeof onProgress === 'function') {
-      onProgress({ percent: 85, stage: 'generating-url', storagePath });
-    }
-
-    const publicUrl = getLaudoPublicUrl(data?.path || storagePath);
+    const persistedPath = data?.path || storagePath;
 
     if (typeof onProgress === 'function') {
-      onProgress({ percent: 100, stage: 'done', storagePath, publicUrl });
+      onProgress({ percent: 100, stage: 'done', storagePath: persistedPath });
     }
 
+    // Persistir somente o path; URL assinada é gerada sob demanda na visualização.
     return {
-      storagePath: data?.path || storagePath,
-      publicUrl,
+      storagePath: persistedPath,
+      /** @deprecated Use storagePath — não gravar publicUrl no banco. */
+      publicUrl: null,
       fileName: file.name,
       fileSize: file.size,
       source: 'storage',
@@ -110,20 +122,66 @@ export async function uploadLaudoToStorage(
   }
 }
 
-export function getLaudoPublicUrl(storagePath) {
-  if (!hasSupabaseCredentials || !supabase || !storagePath) return '';
-  try {
-    const { data } = supabase.storage.from(LAUDOS_BUCKET).getPublicUrl(storagePath);
-    return data?.publicUrl || '';
-  } catch {
-    return '';
+/**
+ * Gera URL assinada temporária. Nunca persistir o retorno no banco.
+ */
+export async function createSignedLaudoUrl(
+  storagePathOrRef,
+  expiresIn = LAUDO_SIGNED_URL_EXPIRES_IN,
+) {
+  if (!hasSupabaseCredentials || !supabase) {
+    throw new Error('Credenciais do Supabase não configuradas.');
   }
+  const path = toLaudoStoragePath(storagePathOrRef) || String(storagePathOrRef || '').trim();
+  if (!path) {
+    throw new Error('Caminho do laudo inválido.');
+  }
+
+  const { data, error } = await supabase.storage
+    .from(LAUDOS_BUCKET)
+    .createSignedUrl(path, expiresIn);
+
+  if (error || !data?.signedUrl) {
+    throw new Error(error?.message || 'Não foi possível gerar link assinado do laudo.');
+  }
+  return data.signedUrl;
+}
+
+/**
+ * Resolve um ref persistido (path | https externa | data:) para URL abrível agora.
+ * Para paths de Storage, gera signed URL sob demanda.
+ */
+export async function resolveLaudoAccessUrl(ref, { expiresIn = LAUDO_SIGNED_URL_EXPIRES_IN } = {}) {
+  if (typeof ref !== 'string' || !ref.trim()) return null;
+  const trimmed = ref.trim();
+  if (isInlineLaudoDataUrl(trimmed)) return trimmed;
+  if (isExternalLaudoUrl(trimmed)) return trimmed;
+  const path = toLaudoStoragePath(trimmed);
+  if (!path) return null;
+  return createSignedLaudoUrl(path, expiresIn);
+}
+
+export async function openLaudoInNewTab(ref, { expiresIn = LAUDO_SIGNED_URL_EXPIRES_IN } = {}) {
+  const url = await resolveLaudoAccessUrl(ref, { expiresIn });
+  if (!url) {
+    throw new Error('Referência de laudo inválida.');
+  }
+  if (typeof window !== 'undefined') {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+  return url;
+}
+
+/** @deprecated Prefer createSignedLaudoUrl — bucket privado não usa URL pública. */
+export function getLaudoPublicUrl(_storagePath) {
+  return '';
 }
 
 export async function deleteLaudoFromStorage(storagePath) {
   if (!hasSupabaseCredentials || !supabase || !storagePath) return false;
+  const path = toLaudoStoragePath(storagePath) || storagePath;
   try {
-    const { error } = await supabase.storage.from(LAUDOS_BUCKET).remove([storagePath]);
+    const { error } = await supabase.storage.from(LAUDOS_BUCKET).remove([path]);
     return !error;
   } catch {
     return false;

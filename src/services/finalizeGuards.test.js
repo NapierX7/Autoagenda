@@ -62,11 +62,13 @@ test('mapAppointmentRecord on short finalize select reproduces homolog gap', () 
   assert.equal(short.vehicleYear, '');
 });
 
-test('upload URL and finalize payload stay separable', () => {
+test('upload persists storage path — never temporary signed/public URL', () => {
   const uploadResult = {
-    publicUrl: 'https://yacelouzfbkhnwjruivy.supabase.co/storage/v1/object/public/laudos/x.pdf',
+    storagePath: '11111111-1111-4111-8111-111111111111/a1111111-1111-4111-8111-111111111102/file.pdf',
+    publicUrl: null,
   };
-  const finalizePayload = { result: 'approved', laudoFileUrl: uploadResult.publicUrl };
-  assert.equal(finalizePayload.laudoFileUrl.startsWith('https://'), true);
+  const finalizePayload = { result: 'approved', laudoFileUrl: uploadResult.storagePath };
+  assert.equal(finalizePayload.laudoFileUrl.includes('/storage/v1/object/'), false);
+  assert.equal(finalizePayload.laudoFileUrl.startsWith('http'), false);
   assert.equal(isOversizedInlineLaudoDataUrl(finalizePayload.laudoFileUrl), false);
 });
